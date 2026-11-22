@@ -31,22 +31,25 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y debootstrap zstd
-          # 新版 Ubuntu（26.04+）中 qemu-user-static 是虚拟包，由 qemu-user-binfmt 提供；旧版仍用 qemu-user-static
-          sudo apt-get install -y qemu-user-binfmt || sudo apt-get install -y qemu-user-static
           python3 -c 'import yaml' 2>/dev/null || sudo apt-get install -y python3-yaml || sudo -H python3 -m pip install --break-system-packages pyyaml
+
+      - name: Set up QEMU (arm64 binfmt)
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
 
       - name: Bootstrap Ubuntu 24.04 (noble) arm64 rootfs
         run: |
           set -euxo pipefail
           sudo debootstrap --arch=arm64 --variant=minbase --foreign noble rootfs http://ports.ubuntu.com/ubuntu-ports/
-          # 兼容不同 qemu 包布局：/usr/bin/qemu-aarch64-static 或 /usr/libexec/qemu-binfmt/aarch64/qemu-aarch64
-          QEMU_BIN="$(command -v qemu-aarch64-static || true)"
-          if [ -z "$QEMU_BIN" ]; then
-            QEMU_BIN="$(ls /usr/libexec/qemu-binfmt/aarch64/qemu-aarch64* /usr/bin/qemu-aarch64-static 2>/dev/null | head -n1)"
+          # 从内核 binfmt_misc 注册信息反查 qemu-aarch64 解释器路径（setup-qemu-action 注册）
+          INTERP="$(awk '/^interpreter/{print $2}' /proc/sys/fs/binfmt_misc/qemu-aarch64 || true)"
+          if [ -z "$INTERP" ] || [ ! -x "$INTERP" ]; then
+            INTERP="$(find /usr -name 'qemu-aarch64*' -type f 2>/dev/null | head -n1 || true)"
           fi
-          test -x "$QEMU_BIN" || { echo "qemu-aarch64 binary not found"; ls /usr/libexec/qemu-binfmt 2>/dev/null; ls /usr/bin | grep -i qemu; exit 1; }
-          echo "Using emulator: $QEMU_BIN"
-          sudo cp "$QEMU_BIN" rootfs/usr/bin/qemu-aarch64-static
+          test -n "$INTERP" || { echo "qemu-aarch64 not found"; cat /proc/sys/fs/binfmt_misc/qemu-aarch64 2>/dev/null || true; find /usr -iname '*qemu*' -maxdepth 4 2>/dev/null | head -50; exit 1; }
+          echo "Using emulator: $INTERP"
+          sudo cp "$INTERP" rootfs/usr/bin/qemu-aarch64-static
           sudo cp /etc/resolv.conf rootfs/etc/resolv.conf
           sudo chroot rootfs /debootstrap/debootstrap --second-stage
 
