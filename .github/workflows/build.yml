@@ -1,0 +1,82 @@
+name: Build Kubuntu 24.04 container for Tiny Container
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/build.yml'
+      - 'build.sh'
+      - 'assemble.sh'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    env:
+      DEBIAN_FRONTEND: noninteractive
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup /usr/share/swift /opt/hostedtoolcache/CodeQL
+          sudo docker image prune -af || true
+          df -h /
+
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y debootstrap qemu-user-static zstd python3-yaml
+
+      - name: Bootstrap Ubuntu 24.04 (noble) arm64 rootfs
+        run: |
+          set -euxo pipefail
+          sudo debootstrap --arch=arm64 --variant=minbase --foreign noble rootfs http://ports.ubuntu.com/ubuntu-ports/
+          sudo cp /usr/bin/qemu-aarch64-static rootfs/usr/bin/
+          sudo cp /etc/resolv.conf rootfs/etc/resolv.conf
+          sudo chroot rootfs /debootstrap/debootstrap --second-stage
+
+      - name: Install Kubuntu packages (qemu emulation, may take 1-2 hours)
+        run: |
+          set -euxo pipefail
+          sudo mount -t proc proc rootfs/proc
+          sudo mount --bind /dev rootfs/dev
+          sudo cp build.sh rootfs/build.sh
+          sudo chroot rootfs /bin/bash /build.sh
+          sudo rm -f rootfs/build.sh
+          sudo umount rootfs/dev || true
+          sudo umount rootfs/proc || true
+          df -h /
+
+      - name: Assemble tiny.yaml + helper files and package
+        run: |
+          set -euxo pipefail
+          chmod +x assemble.sh
+          bash assemble.sh
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: kubuntu-zh-${{ github.run_number }}
+          name: Kubuntu 24.04 容器镜像（第 ${{ github.run_number }} 次构建）
+          body: |
+            ## 使用方法
+            1. 下载下方 `kubuntu-zh-*.tar.zst`（若为分卷 `*.part-00 / *.part-01`，先合并：`cat kubuntu-zh-*.tar.zst.part-* > kubuntu-zh.tar.zst`）
+            2. 打开小小容器（Tiny Container），在主界面点击 **导入** 按钮，选择该文件
+            3. 等待导入完成，进入「功能」页，启用 **X11 (Termux:X11)** 或 **AVNC (VNC)** 前端
+            4. 重启容器即可进入 KDE Plasma 桌面
+
+            ## 默认账户
+            - 用户 `tiny` / 密码 `tiny`（免密 sudo）
+            - root 密码 `tiny`
+
+            ## 说明
+            - 基于 Ubuntu 24.04 LTS (noble) arm64 + kde-plasma-desktop
+            - 图形会话：Plasma X11（startplasma-x11）
+            - /opt/tiny 辅助文件、pipewire 配置复用自官方 trixie-zh 容器
+          files: kubuntu-zh-*
+          make_latest: true
