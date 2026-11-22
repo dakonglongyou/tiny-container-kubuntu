@@ -51,16 +51,22 @@ EOF
 printf 'nameserver 223.5.5.5\nnameserver 119.29.29.29\nnameserver 8.8.8.8\n' > /etc/resolv.conf
 
 # ---- KDE Plasma 桌面 + 图形/音频基础设施 ----
+# 核心包：必须全部装成功，缺任何一个都视为构建失败
 apt-get install -y \
   dbus-x11 \
   kde-plasma-desktop \
   tigervnc-standalone-server \
   x11-xserver-utils xterm \
-  fastfetch wget curl nano \
+  wget curl nano \
   fcitx5 fcitx5-chinese-addons fonts-noto-cjk language-pack-zh-hans \
-  falkon ark gwenview kate okular kwrite
+  ark gwenview kate okular kwrite
 
-# pipewire 音频（不同 Ubuntu 版本包名略有差异，逐个尝试）
+# 可选包：不同 Ubuntu 版本仓库差异较大（如 fastfetch 在 24.04 不存在），逐个安装，缺失只告警不失败
+for pkg in fastfetch falkon konsole dolphin plasma-nm; do
+  apt-get install -y "$pkg" || echo "WARN: package '$pkg' unavailable on this release, skipped"
+done
+
+# pipewire 音频（包名随版本变化，逐个尝试）
 apt-get install -y pipewire wireplumber || true
 apt-get install -y pipewire-pulse || apt-get install -y pipewire-audio || true
 
