@@ -38,20 +38,39 @@ jobs:
         with:
           platforms: arm64
 
+      - name: Show binfmt registration
+        run: |
+          cat /proc/sys/fs/binfmt_misc/status || true
+          ls /proc/sys/fs/binfmt_misc/ || true
+          cat /proc/sys/fs/binfmt_misc/qemu-aarch64 || true
+
       - name: Bootstrap Ubuntu 24.04 (noble) arm64 rootfs
         run: |
-          set -euxo pipefail
-          sudo debootstrap --arch=arm64 --variant=minbase --foreign noble rootfs http://ports.ubuntu.com/ubuntu-ports/
-          # 从内核 binfmt_misc 注册信息反查 qemu-aarch64 解释器路径（setup-qemu-action 注册）
-          INTERP="$(awk '/^interpreter/{print $2}' /proc/sys/fs/binfmt_misc/qemu-aarch64 || true)"
-          if [ -z "$INTERP" ] || [ ! -x "$INTERP" ]; then
-            INTERP="$(find /usr -name 'qemu-aarch64*' -type f 2>/dev/null | head -n1 || true)"
+          set -o pipefail
+          set -x
+          sudo debootstrap --arch=arm64 --variant=minbase --foreign noble rootfs http://ports.ubuntu.com/ubuntu-ports/ 2>&1 | tee bootstrap.log
+          # setup-qemu-action 注册的 binfmt 带 F 标志（解释器由内核持有），chroot 内可直接执行 arm64 程序，无需拷贝 qemu
+          if [ -f /proc/sys/fs/binfmt_misc/qemu-aarch64 ] && grep -qw F /proc/sys/fs/binfmt_misc/qemu-aarch64; then
+            echo "binfmt F flag present; running second-stage directly"
+          else
+            echo "F flag missing; extracting qemu-aarch64 from tonistiigi/binfmt image and registering locally"
+            CID=$(docker create tonistiigi/binfmt:master)
+            docker cp "$CID":/usr/bin/qemu-aarch64 /tmp/qemu-aarch64
+            docker rm -f "$CID" || true
+            sudo install -m 0755 /tmp/qemu-aarch64 /usr/local/bin/qemu-aarch64-static
+            printf ':qemu-aarch64-local:M::\x7fELF\x02\x01\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x02\x00\xb7\x00:\xff\xff\xff\xff\xff\xff\xff\x00\xff\xff\xff\xff\xff\xff\xff\xff\xfe\xff\xff\xff:/usr/local/bin/qemu-aarch64-static:F' | sudo tee /proc/sys/fs/binfmt_misc/register
           fi
-          test -n "$INTERP" || { echo "qemu-aarch64 not found"; cat /proc/sys/fs/binfmt_misc/qemu-aarch64 2>/dev/null || true; find /usr -iname '*qemu*' -maxdepth 4 2>/dev/null | head -50; exit 1; }
-          echo "Using emulator: $INTERP"
-          sudo cp "$INTERP" rootfs/usr/bin/qemu-aarch64-static
           sudo cp /etc/resolv.conf rootfs/etc/resolv.conf
-          sudo chroot rootfs /debootstrap/debootstrap --second-stage
+          sudo chroot rootfs /debootstrap/debootstrap --second-stage 2>&1 | tee -a bootstrap.log
+        # 步骤内已 tee 日志；失败时由下面步骤上传
+
+      - name: Upload bootstrap log (on failure)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bootstrap-log
+          path: bootstrap.log
+          if-no-files-found: ignore
 
       - name: Install Kubuntu packages (qemu emulation, may take 1-2 hours)
         run: |
@@ -59,17 +78,33 @@ jobs:
           sudo mount -t proc proc rootfs/proc
           sudo mount --bind /dev rootfs/dev
           sudo cp build.sh rootfs/build.sh
-          sudo chroot rootfs /bin/bash /build.sh
+          sudo chroot rootfs /bin/bash /build.sh 2>&1 | tee install.log
           sudo rm -f rootfs/build.sh
           sudo umount rootfs/dev || true
           sudo umount rootfs/proc || true
           df -h /
 
+      - name: Upload install log (on failure)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: install-log
+          path: install.log
+          if-no-files-found: ignore
+
       - name: Assemble tiny.yaml + helper files and package
         run: |
           set -euxo pipefail
           chmod +x assemble.sh
-          bash assemble.sh
+          bash assemble.sh 2>&1 | tee assemble.log
+
+      - name: Upload assemble log (on failure)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: assemble-log
+          path: assemble.log
+          if-no-files-found: ignore
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
@@ -90,6 +125,6 @@ jobs:
             ## 说明
             - 基于 Ubuntu 24.04 LTS (noble) arm64 + kde-plasma-desktop
             - 图形会话：Plasma X11（startplasma-x11）
-            - /opt/tiny 辅助文件、pipewire 配置复用自官方 trixie-zh 容器
+            - /opt/tiny 辅助文件、pipewire 配置复用自官方 xfce-zh 容器
           files: kubuntu-zh-*
           make_latest: true
