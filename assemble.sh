@@ -12,18 +12,26 @@ mkdir -p official_dl official_rootfs
 # 注意：trixie-zh 是纯命令行版；桌面版的辅助文件要从 xfce-zh 抽取
 gh release download --repo tiny-computer/images --pattern 'xfce-zh-*.tar.zst' --dir official_dl --clobber
 ASSET=$(ls official_dl/*.tar.zst | head -n1)
+# 注意：官方归档的成员名不带 ./ 前缀；某些路径（如 etc/wireplumber）可能不存在，
+# tar 遇到未匹配的 --wildcards 模式会以退出码 2 结束，这里显式容忍，靠后续 test 校验必需文件。
+set +e
 zstd -dc --long=31 --memory=2048MB "$ASSET" | tar -C official_rootfs -x --wildcards \
-  './.tiny.yaml' '.tiny.yaml' \
-  './opt/tiny/*' 'opt/tiny/*' \
-  './proc/.*' 'proc/.*' \
-  './sys/.*' 'sys/.*' \
-  './etc/pipewire/*' './etc/pipewire-pulse/*' './etc/wireplumber/*' \
+  '.tiny.yaml' \
+  'opt/tiny/*' \
+  'proc/.*' \
+  'sys/.*' \
   'etc/pipewire/*' 'etc/pipewire-pulse/*' 'etc/wireplumber/*' \
-  './home/tiny/.config/pipewire/*' './home/tiny/.config/wireplumber/*' \
   'home/tiny/.config/pipewire/*' 'home/tiny/.config/wireplumber/*'
+set -e
 rm -f "$ASSET"
 
-# 校验抽取结果
+echo "=== extracted tree ==="
+ls -la official_rootfs || true
+ls -la official_rootfs/opt 2>/dev/null || true
+ls -la official_rootfs/opt/tiny 2>/dev/null || true
+ls -la official_rootfs/proc 2>/dev/null || true
+
+# 校验必需文件
 test -f official_rootfs/.tiny.yaml
 test -d official_rootfs/opt/tiny
 test -f official_rootfs/proc/.loadavg
