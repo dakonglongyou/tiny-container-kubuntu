@@ -87,7 +87,8 @@ BASE="kubuntu-zh-${STAMP}"
 sudo tar -C "$ROOTFS" --numeric-owner -cf /tmp/out.tar .tiny.yaml
 sudo tar -C "$ROOTFS" --numeric-owner --exclude='./.tiny.yaml' --exclude='./dev/*' -rf /tmp/out.tar .
 zstd -10 -T0 /tmp/out.tar -o "${BASE}.tar.zst"
-rm -f /tmp/out.tar
+# /tmp 有 sticky bit，root 创建的临时 tar 必须用 sudo 删除
+sudo rm -f /tmp/out.tar
 
 # GitHub Release 单文件上限 2GB，超限自动分卷
 SIZE=$(stat -c%s "${BASE}.tar.zst")
